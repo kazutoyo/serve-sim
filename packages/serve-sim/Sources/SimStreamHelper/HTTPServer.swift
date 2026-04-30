@@ -64,12 +64,24 @@ final class HTTPServer {
             let size = self?.clientManager ?? nil
             let w = size?.screenWidth ?? 0
             let h = size?.screenHeight ?? 0
-            return HttpResponse.ok(.json(["width": w, "height": h] as AnyObject))
+            let body = try! JSONSerialization.data(
+                withJSONObject: ["width": w, "height": h]
+            )
+            return .raw(200, "OK", [
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            ]) { try? $0.write(body) }
         }
 
         // Health endpoint
         server["/health"] = { _ in
-            return .ok(.json(["status": "ok"] as AnyObject))
+            let body = try! JSONSerialization.data(
+                withJSONObject: ["status": "ok"]
+            )
+            return .raw(200, "OK", [
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            ]) { try? $0.write(body) }
         }
 
         // CORS preflight
