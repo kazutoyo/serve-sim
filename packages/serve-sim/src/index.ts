@@ -2047,7 +2047,7 @@ program
   .description("Record the simulator screen to MP4 (start|stop|status)")
   .argument("<verb>", "start | stop | status")
   .option(...deviceOpt)
-  .option("--dir <dir>", "Captures directory (default: ./serve-sim-captures)")
+  .option("--dir <dir>", "Captures directory for 'start' (default: ./serve-sim-captures)")
   .action((verb: string, opts) => recordCommand(verb, opts));
 
 // `camera` and `permissions` keep their own dedicated argument parsers (the

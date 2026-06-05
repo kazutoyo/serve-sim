@@ -28,6 +28,11 @@ through `serve-sim` subcommands against a running server:
   that need explicit `begin`/`move`/`end` events.
 - `serve-sim button [home|lock|…] [-d udid]` — hardware button.
 - `serve-sim camera …` — inject the dylib, hot-swap source, toggle mirror.
+- `serve-sim screenshot [-o path] [-d udid]` — save a PNG of the simulator
+  screen (default: `./serve-sim-captures/`); prints the saved path.
+- `serve-sim record start|stop|status [-d udid]` — record the screen to MP4;
+  `stop` prints the saved path and works for recordings started from the web
+  UI too. Exit codes: 0=ok, 1=error, 2=already recording, 3=not recording.
 - `xcrun simctl openurl booted <url>` — deep-link into apps (faster than
   tapping through Expo Go's recent-projects list).
 
