@@ -795,7 +795,7 @@ function AppWithConfig({
                 <circle cx="12" cy="13" r="4" />
               </svg>
             </SimulatorToolbar.Button>
-            <RecordToolbarButton udid={config.device} onResult={notifyCapture} />
+            <RecordToolbarButton udid={config.device} streaming={streaming} onResult={notifyCapture} />
             <SimulatorToolbar.RotateButton title="Rotate device" />
           </SimulatorToolbar.Actions>
         </SimulatorToolbar>

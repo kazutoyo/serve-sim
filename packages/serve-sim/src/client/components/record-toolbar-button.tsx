@@ -11,7 +11,7 @@ import {
 type RecordingInfo = { path: string; startedAt: number };
 
 function formatElapsed(ms: number): string {
-  const total = Math.floor(ms / 1000);
+  const total = Math.max(0, Math.floor(ms / 1000));
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
@@ -33,9 +33,11 @@ const StopIcon = (
 
 export function RecordToolbarButton({
   udid,
+  streaming,
   onResult,
 }: {
   udid: string | null;
+  streaming: boolean;
   onResult: (ok: boolean, message: string) => void;
 }) {
   const [recording, setRecording] = useState<RecordingInfo | null>(null);
@@ -44,6 +46,7 @@ export function RecordToolbarButton({
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!recording) return;
+    setNow(Date.now()); // re-arm: the mount-time value is stale by now
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [recording]);
@@ -93,7 +96,7 @@ export function RecordToolbarButton({
       title={recording ? `Recording ${formatElapsed(now - recording.startedAt)} — click to stop` : "Record screen"}
       aria-pressed={!!recording}
       onClick={() => void handleClick()}
-      style={recording ? { color: "#f87171" } : undefined}
+      style={recording && streaming ? { color: "#f87171" } : undefined}
     >
       {recording ? StopIcon : RecordIcon}
     </SimulatorToolbar.Button>
