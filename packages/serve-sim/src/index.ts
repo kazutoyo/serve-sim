@@ -1121,6 +1121,58 @@ async function memoryWarning(deviceArg?: string) {
   });
 }
 
+// ─── Screenshot / Recording ───
+
+async function screenshotCommand(opts: { device?: string; output?: string; dir?: string }) {
+  const { resolveCapturesDir, takeScreenshot } = await import("./captures");
+  const udid = opts.device ?? readState()?.device;
+  if (!udid) {
+    console.error("No device. Pass -d <udid> or start serve-sim first.");
+    process.exit(1);
+  }
+  try {
+    const path = await takeScreenshot(udid, resolveCapturesDir(opts.dir), opts.output);
+    console.log(path);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
+async function recordCommand(verb: string, opts: { device?: string; dir?: string }) {
+  const captures = await import("./captures");
+  const udid = opts.device ?? readState()?.device;
+  if (!udid) {
+    console.error("No device. Pass -d <udid> or start serve-sim first.");
+    process.exit(1);
+  }
+  try {
+    if (verb === "start") {
+      const state = await captures.startRecording(udid, captures.resolveCapturesDir(opts.dir));
+      console.log(state.path);
+    } else if (verb === "stop") {
+      const path = await captures.stopRecording(udid);
+      console.log(path);
+    } else if (verb === "status") {
+      console.log(JSON.stringify(captures.recordingStatus(udid)));
+    } else {
+      console.error("Usage: serve-sim record <start|stop|status> [-d udid] [--dir <dir>]");
+      process.exit(1);
+    }
+  } catch (err) {
+    if (err instanceof captures.AlreadyRecordingError) {
+      console.error(err.message);
+      process.exit(2);
+    }
+    if (err instanceof captures.NotRecordingError) {
+      console.error(err.message);
+      process.exit(3);
+    }
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
 // ─── Camera injection ───
 
 /**
@@ -1790,7 +1842,7 @@ Examples:
 
 // ─── Serve preview ───
 
-async function serve(servePort: number, devices: string[], portExplicit: boolean, host: string) {
+async function serve(servePort: number, devices: string[], portExplicit: boolean, host: string, capturesDir?: string) {
   let targetDevice: string | undefined;
 
   if (devices.length > 0) {
@@ -1809,7 +1861,7 @@ async function serve(servePort: number, devices: string[], portExplicit: boolean
   }
 
   const { simMiddleware } = await import("./middleware");
-  const middleware = simMiddleware({ basePath: "/", device: targetDevice });
+  const middleware = simMiddleware({ basePath: "/", device: targetDevice, capturesDir });
 
   // Try requested port; if busy and the user didn't pin it, scan forward.
   const maxScan = portExplicit ? 1 : 50;
@@ -1882,6 +1934,7 @@ program
       "shell-exec route.",
     "127.0.0.1",
   )
+  .option("--captures-dir <dir>", "Directory for screenshots/recordings (default: ./serve-sim-captures)")
   .option("--detach", "Spawn helper and exit (daemon mode)")
   .option("-q, --quiet", "Suppress human-readable output, JSON only")
   .option("--no-preview", "Skip the web preview server; stream in foreground only")
@@ -1915,7 +1968,7 @@ Examples:
     } else if (opts.preview === false) {
       await follow(devices, startPort ?? 3100, !!opts.quiet);
     } else {
-      await serve(startPort ?? 3200, devices, startPort !== undefined, opts.host);
+      await serve(startPort ?? 3200, devices, startPort !== undefined, opts.host, opts.capturesDir);
     }
   });
 
@@ -1980,6 +2033,22 @@ program
   .description("Simulate a memory warning on the device")
   .option(...deviceOpt)
   .action((opts) => memoryWarning(opts.device));
+
+program
+  .command("screenshot")
+  .description("Save a screenshot of the simulator (prints the saved path)")
+  .option(...deviceOpt)
+  .option("-o, --output <path>", "Exact output path (default: <captures-dir>/<timestamp>.png)")
+  .option("--dir <dir>", "Captures directory (default: ./serve-sim-captures)")
+  .action((opts) => screenshotCommand(opts));
+
+program
+  .command("record")
+  .description("Record the simulator screen to MP4 (start|stop|status)")
+  .argument("<verb>", "start | stop | status")
+  .option(...deviceOpt)
+  .option("--dir <dir>", "Captures directory (default: ./serve-sim-captures)")
+  .action((verb: string, opts) => recordCommand(verb, opts));
 
 // `camera` and `permissions` keep their own dedicated argument parsers (the
 // camera verb has nested sub-verbs and source flags; permissions has a
