@@ -1212,7 +1212,20 @@ async function logsCommand(opts: {
       const entry = parseLogLine(line);
       if (entry) console.log(formatLogEntry(entry));
     }
+    // Drop a runaway partial line so a malformed/never-terminated log entry
+    // can't grow `buf` without bound during --follow.
+    if (buf.length > 1024 * 1024) buf = "";
   });
+  // Kill the simctl child if we're signalled — without this, a --follow tail
+  // started from a non-TTY process group would orphan the child.
+  const cleanup = () => {
+    child.stdout?.destroy();
+    child.kill();
+    process.exit(0);
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+
   child.on("error", (err) => {
     console.error("Failed to run simctl:", err.message);
     process.exit(1);
