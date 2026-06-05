@@ -28,6 +28,7 @@ import { AxToolbarButton } from "./components/ax-toolbar-button";
 import { BootEmptyState } from "./components/boot-empty-state";
 import { DevicePicker } from "./components/device-picker";
 import { GridPanel } from "./components/grid-panel";
+import { LogsPanel } from "./components/logs-panel";
 import { ResizeHandle } from "./components/resize-handle";
 import { SimulatorResizeCornerHandle } from "./components/simulator-resize-corner-handle";
 import { SimulatorResizeSizeBadge } from "./components/simulator-resize-size-badge";
@@ -52,6 +53,7 @@ import { hidUsageForCode } from "./utils/hid";
 import {
   DEVTOOLS_PANEL_WIDTH,
   GRID_PANEL_WIDTH,
+  LOGS_PANEL_WIDTH,
   PANEL_WIDTH,
 } from "./utils/panel-widths";
 import { simEndpoint } from "./utils/sim-endpoint";
@@ -482,6 +484,7 @@ function AppWithConfig({
   // Subscribe to app-state SSE.
   const [currentApp, setCurrentApp] = useState<{ bundleId: string; isReactNative: boolean; pid?: number } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const { width: toolsPanelWidth, onPointerDown: onToolsResize } = useResizableWidth(
     "serve-sim:tools-panel-width",
     PANEL_WIDTH,
@@ -499,6 +502,12 @@ function AppWithConfig({
     GRID_PANEL_WIDTH,
     360,
     1400,
+  );
+  const { width: logsPanelWidth, onPointerDown: onLogsResize } = useResizableWidth(
+    "serve-sim:logs-panel-width",
+    LOGS_PANEL_WIDTH,
+    380,
+    1200,
   );
   const [viewportWidth, setViewportWidth] = useState(
     () => (typeof window !== "undefined" ? window.innerWidth : 0),
@@ -681,6 +690,8 @@ function AppWithConfig({
     ? devtoolsPanelWidth
     : gridOpen
     ? gridPanelWidth
+    : logsOpen
+    ? logsPanelWidth
     : panelOpen
     ? toolsPanelWidth
     : 0;
@@ -895,12 +906,13 @@ function AppWithConfig({
 
       {/* Right-edge sidebar rail. */}
       <div
-        className={`fixed top-3 right-3 flex flex-col gap-1 p-1 bg-panel-bg border border-white/8 rounded-[10px] backdrop-blur-[12px] [-webkit-backdrop-filter:blur(12px)] [transition:opacity_0.18s_ease] z-40 ${(panelOpen || devtoolsOpen || gridOpen) ? "opacity-0 pointer-events-none" : "opacity-100 pointer-events-auto"}`}
+        className={`fixed top-3 right-3 flex flex-col gap-1 p-1 bg-panel-bg border border-white/8 rounded-[10px] backdrop-blur-[12px] [-webkit-backdrop-filter:blur(12px)] [transition:opacity_0.18s_ease] z-40 ${(panelOpen || devtoolsOpen || gridOpen || logsOpen) ? "opacity-0 pointer-events-none" : "opacity-100 pointer-events-auto"}`}
       >
         <button
           onClick={() => {
             setDevtoolsOpen(false);
             setGridOpen(false);
+            setLogsOpen(false);
             setPanelOpen((o) => !o);
           }}
           className="w-[30px] h-[30px] flex items-center justify-center bg-transparent border-none rounded-md text-[#8e8e93] cursor-pointer [transition:background_0.15s_ease,color_0.15s_ease] hover:bg-white/8 hover:text-white"
@@ -917,6 +929,7 @@ function AppWithConfig({
           onClick={() => {
             setPanelOpen(false);
             setGridOpen(false);
+            setLogsOpen(false);
             setDevtoolsOpen((o) => !o);
           }}
           className="w-[30px] h-[30px] flex items-center justify-center bg-transparent border-none rounded-md text-[#8e8e93] cursor-pointer [transition:background_0.15s_ease,color_0.15s_ease] hover:bg-white/8 hover:text-white"
@@ -934,6 +947,7 @@ function AppWithConfig({
           onClick={() => {
             setPanelOpen(false);
             setDevtoolsOpen(false);
+            setLogsOpen(false);
             setGridOpen((o) => !o);
           }}
           className="w-[30px] h-[30px] flex items-center justify-center bg-transparent border-none rounded-md text-[#8e8e93] cursor-pointer [transition:background_0.15s_ease,color_0.15s_ease] hover:bg-white/8 hover:text-white"
@@ -946,6 +960,23 @@ function AppWithConfig({
             <rect x="14" y="3" width="7" height="7" rx="1.5" />
             <rect x="3" y="14" width="7" height="7" rx="1.5" />
             <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+        </button>
+        <button
+          onClick={() => {
+            setPanelOpen(false);
+            setDevtoolsOpen(false);
+            setGridOpen(false);
+            setLogsOpen((o) => !o);
+          }}
+          className="w-[30px] h-[30px] flex items-center justify-center bg-transparent border-none rounded-md text-[#8e8e93] cursor-pointer [transition:background_0.15s_ease,color_0.15s_ease] hover:bg-white/8 hover:text-white"
+          aria-label="Open logs panel"
+          aria-pressed={logsOpen}
+          title="Logs"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 17l4-4-4-4" />
+            <line x1="11" y1="19" x2="20" y2="19" />
           </svg>
         </button>
       </div>
@@ -996,6 +1027,20 @@ function AppWithConfig({
         visible={devtoolsOpen}
         onPointerDown={onDevtoolsResize}
         ariaLabel="Resize WebKit DevTools panel"
+      />
+
+      <LogsPanel
+        open={logsOpen}
+        onClose={() => setLogsOpen(false)}
+        logsEndpoint={config.logsEndpoint ?? simEndpoint("logs")}
+        currentAppKey={currentApp?.bundleId ?? null}
+        width={logsPanelWidth}
+      />
+      <ResizeHandle
+        panelWidth={logsPanelWidth}
+        visible={logsOpen}
+        onPointerDown={onLogsResize}
+        ariaLabel="Resize logs panel"
       />
 
       {/* Status bar */}
