@@ -43,6 +43,11 @@ export function recordingStateFile(udid: string): string {
   return join(STATE_DIR, "recordings", `${udid}.json`);
 }
 
+/**
+ * Write the recording state for a device to the registry file.
+ *
+ * @internal Exported for tests; consumers use startRecording/recordingStatus.
+ */
 export function writeRecordingState(udid: string, state: RecordingState): void {
   const file = recordingStateFile(udid);
   mkdirSync(dirname(file), { recursive: true });
@@ -53,6 +58,8 @@ export function writeRecordingState(udid: string, state: RecordingState): void {
  * Read the active recording for a device. Returns null (and removes the
  * stale file) when the recorder process is gone — e.g. the simulator was
  * shut down mid-recording, which makes simctl exit on its own.
+ *
+ * @internal Exported for tests; consumers use startRecording/recordingStatus.
  */
 export function readRecordingState(udid: string): RecordingState | null {
   const file = recordingStateFile(udid);
@@ -142,7 +149,8 @@ export async function startRecording(
   child.stderr?.destroy(); // detach fully; nothing reads it after the grace window
   child.unref();
 
-  const state: RecordingState = { pid: child.pid!, path, startedAt: Date.now() };
+  if (child.pid == null) throw new Error("spawn succeeded but child.pid is undefined");
+  const state: RecordingState = { pid: child.pid, path, startedAt: Date.now() };
   writeRecordingState(udid, state);
   return state;
 }
@@ -150,8 +158,9 @@ export async function startRecording(
 /**
  * Stop the active recording: SIGINT the recorder (simctl finalizes the moov
  * atom) and wait for it to exit. Returns the MP4 path.
+ * `opts.timeoutMs` overrides the 15-second deadline (useful in tests).
  */
-export async function stopRecording(udid: string): Promise<string> {
+export async function stopRecording(udid: string, opts?: { timeoutMs?: number }): Promise<string> {
   const state = readRecordingState(udid);
   if (!state) throw new NotRecordingError();
   try {
@@ -159,7 +168,8 @@ export async function stopRecording(udid: string): Promise<string> {
   } catch {
     // Died between read and kill — state already valid to clear.
   }
-  const deadline = Date.now() + 15_000;
+  const timeoutMs = opts?.timeoutMs ?? 15_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       process.kill(state.pid, 0);
@@ -169,7 +179,12 @@ export async function stopRecording(udid: string): Promise<string> {
     }
     await sleep(100);
   }
-  throw new Error(`Recorder pid ${state.pid} did not exit within 15s`);
+  // Timeout — the recorder ignored SIGINT for the allotted time (hung simctl). Force-kill
+  // and clear the registry so the device isn't permanently locked; the MP4
+  // is likely truncated, which beats never being able to record again.
+  try { process.kill(state.pid, "SIGKILL"); } catch {}
+  try { unlinkSync(recordingStateFile(udid)); } catch {}
+  throw new Error(`Recorder pid ${state.pid} did not exit within ${timeoutMs / 1_000}s; force-killed`);
 }
 
 export interface RecordingStatus {

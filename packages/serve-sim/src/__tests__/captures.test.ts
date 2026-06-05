@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
-import { mkdtempSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { isAbsolute, dirname, join, sep } from "path";
 import {
@@ -15,6 +14,7 @@ import {
   screenshotArgs,
   startRecording,
   stopRecording,
+  takeScreenshot,
   writeRecordingState,
   type RecordingState,
 } from "../captures";
@@ -93,6 +93,12 @@ describe("recording state file", () => {
   });
 });
 
+describe("takeScreenshot", () => {
+  test("rejects with simctl's error for an invalid device", async () => {
+    await expect(takeScreenshot("NOT-A-REAL-UDID", mkdtempSync(join(tmpdir(), "serve-sim-shot-")))).rejects.toThrow(/Invalid device|device|error/i);
+  });
+});
+
 describe("start/stop/status recording", () => {
   const dir = mkdtempSync(join(tmpdir(), "serve-sim-captures-test-"));
   const UDID = "TEST-REC-1";
@@ -140,4 +146,35 @@ describe("start/stop/status recording", () => {
     ).rejects.toThrow();
     expect(recordingStatus("TEST-FAIL").recording).toBe(false);
   });
+});
+
+describe("stopRecording timeout/zombie fix", () => {
+  const dir = mkdtempSync(join(tmpdir(), "serve-sim-captures-hung-"));
+  const UDID2 = "TEST-HUNG";
+  // A recorder that ignores SIGINT — simulates a hung simctl process.
+  const hungCmd = { command: "/bin/sh", args: ["-c", "trap '' INT; sleep 100"] };
+
+  test("force-kills and clears registry when recorder ignores SIGINT", async () => {
+    const started = await startRecording(UDID2, dir, { cmd: hungCmd });
+    const pid = started.pid;
+
+    await expect(stopRecording(UDID2, { timeoutMs: 1_000 })).rejects.toThrow(/did not exit/);
+
+    // Registry must be cleared — device must not be permanently locked.
+    expect(readRecordingState(UDID2)).toBeNull();
+
+    // The process must actually be dead within ~2s of the SIGKILL.
+    const deadline = Date.now() + 2_000;
+    let dead = false;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+        await new Promise<void>((r) => setTimeout(r, 50));
+      } catch {
+        dead = true;
+        break;
+      }
+    }
+    expect(dead).toBe(true);
+  }, 10_000);
 });
