@@ -971,7 +971,7 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
       const UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
       const sendJson = (status: number, payload: unknown) => {
-        res.writeHead(status, { "Content-Type": "application/json" });
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         res.end(JSON.stringify(payload));
       };
 

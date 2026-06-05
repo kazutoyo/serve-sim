@@ -59,6 +59,17 @@ describe("capture endpoints — validation", () => {
       expect(body.recording).toBe(false);
     });
   });
+
+  test("GET /api/record/status with no udid falls back to selected device", async () => {
+    await withServer(async (origin) => {
+      const r = await fetch(`${origin}/api/record/status`);
+      // No helper running → 404 (No serve-sim device). On a dev machine with
+      // a live helper it's 200 with a status JSON. Invariant: JSON, no crash.
+      expect([200, 404]).toContain(r.status);
+      const body = await r.json() as Record<string, unknown>;
+      expect(body).toBeTruthy();
+    });
+  });
 });
 
 describe("GET /api/captures/<file>", () => {
