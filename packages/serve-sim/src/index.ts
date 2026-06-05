@@ -10,6 +10,17 @@ import { textToKeyEvents, UnsupportedCharacterError, sendKeyEventsToWs } from ".
 import { dirnameOf, sleepSync, isPortFree, servePreview } from "./runtime";
 import { findBootedDevice, resolveDevice } from "./device";
 import { permissions } from "./permissions";
+import {
+  buildLogShowArgs,
+  buildLogStreamArgs,
+  buildProcessPredicate,
+  formatLogEntry,
+  isValidLastDuration,
+  parseLogLine,
+  LOG_LEVELS,
+  type LogLevel,
+} from "./logs";
+import { fetchForegroundApp, resolveAppProcess } from "./logs-exec";
 import { debugCli, debugHelper, debugState } from "./debug";
 
 // `import.meta.dir` is Bun-only; resolve once via fileURLToPath so the bundled
@@ -1121,6 +1132,94 @@ async function memoryWarning(deviceArg?: string) {
   });
 }
 
+async function logsCommand(opts: {
+  device?: string;
+  last?: string;
+  follow?: boolean;
+  app?: string;
+  system?: boolean;
+  level?: string;
+  json?: boolean;
+}) {
+  if (opts.last && opts.follow) {
+    console.error("--last and --follow are mutually exclusive.");
+    process.exit(1);
+  }
+  if (opts.app && opts.system) {
+    console.error("--app and --system are mutually exclusive.");
+    process.exit(1);
+  }
+  const level = (opts.level ?? "info") as LogLevel;
+  if (!LOG_LEVELS.includes(level)) {
+    console.error(`Invalid --level: ${opts.level}. Use default | info | debug.`);
+    process.exit(1);
+  }
+  const last = opts.last ?? "1m";
+  if (!isValidLastDuration(last)) {
+    console.error(`Invalid --last duration: ${last}. Use e.g. 30s, 2m, 1h.`);
+    process.exit(1);
+  }
+
+  // Resolve the target device. Unlike tap/gesture this doesn't need a running
+  // server — simctl reads the OS log archive directly.
+  const udid = opts.device
+    ? resolveDevice(opts.device)
+    : readState()?.device ?? findBootedDevice();
+  if (!udid) {
+    console.error("No booted simulator found.");
+    process.exit(1);
+  }
+
+  // Scope: default = foreground app (needs the running helper); --app skips
+  // the helper; --system skips filtering entirely.
+  let predicate: string | undefined;
+  if (!opts.system) {
+    let bundleId = opts.app ?? null;
+    if (!bundleId) {
+      const state = readState(opts.device ? udid : undefined);
+      const fg = state ? await fetchForegroundApp(state.port) : null;
+      if (!fg) {
+        console.error("Could not determine the foreground app (is `serve-sim` running?).");
+        console.error("Pass --app <bundleId> for a specific app, or --system for everything.");
+        process.exit(1);
+      }
+      bundleId = fg.bundleId;
+    }
+    const processName = resolveAppProcess(udid, bundleId);
+    if (!processName) {
+      console.error(`App not installed on device ${udid}: ${bundleId}`);
+      process.exit(1);
+    }
+    predicate = buildProcessPredicate(processName);
+  }
+
+  const args = opts.follow
+    ? buildLogStreamArgs({ udid, level, predicate })
+    : buildLogShowArgs({ udid, last, level, predicate });
+  const child = nodeSpawn("xcrun", args, { stdio: ["ignore", "pipe", "inherit"] });
+
+  let buf = "";
+  child.stdout!.on("data", (chunk: Buffer) => {
+    buf += chunk.toString();
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (opts.json) {
+        if (line.trim().startsWith("{")) console.log(line);
+        continue;
+      }
+      const entry = parseLogLine(line);
+      if (entry) console.log(formatLogEntry(entry));
+    }
+  });
+  child.on("error", (err) => {
+    console.error("Failed to run simctl:", err.message);
+    process.exit(1);
+  });
+  child.on("close", (code) => process.exit(code ?? 0));
+}
+
 // ─── Camera injection ───
 
 /**
@@ -1980,6 +2079,18 @@ program
   .description("Simulate a memory warning on the device")
   .option(...deviceOpt)
   .action((opts) => memoryWarning(opts.device));
+
+program
+  .command("logs")
+  .description("Show simulator logs (default: last 1m of the foreground app)")
+  .option(...deviceOpt)
+  .option("--last <duration>", "Snapshot window, e.g. 30s, 2m (snapshot mode default: 1m)")
+  .option("-f, --follow", "Stream logs live (mutually exclusive with --last)")
+  .option("--app <bundleId>", "Only logs from this app's process")
+  .option("--system", "Full system log (no process filter)")
+  .option("--level <level>", "default | info | debug", "info")
+  .option("--json", "Raw NDJSON output instead of formatted text")
+  .action((opts) => logsCommand(opts));
 
 // `camera` and `permissions` keep their own dedicated argument parsers (the
 // camera verb has nested sub-verbs and source flags; permissions has a
