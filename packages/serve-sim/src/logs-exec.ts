@@ -34,16 +34,17 @@ export function resolveAppProcess(udid: string, bundleId: string): string | null
 export async function fetchForegroundApp(
   port: number,
 ): Promise<{ bundleId: string; pid: number } | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 3000);
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 3000);
     const res = await fetch(`http://127.0.0.1:${port}/foreground`, { signal: ctrl.signal });
-    clearTimeout(timer);
     if (!res.ok) return null;
     const data = (await res.json()) as { bundleId?: string; pid?: number };
     if (typeof data.bundleId !== "string" || data.bundleId === "") return null;
     return { bundleId: data.bundleId, pid: typeof data.pid === "number" ? data.pid : 0 };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }

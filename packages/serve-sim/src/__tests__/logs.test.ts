@@ -31,7 +31,7 @@ describe("isValidLastDuration", () => {
     expect(isValidLastDuration(v)).toBe(true);
   });
 
-  test.each(["", "1w", "m", "1.5m", "30 s", "-1m", "1m; rm -rf /"])(
+  test.each(["", "0", "0s", "1w", "m", "1.5m", "30 s", "-1m", "1m; rm -rf /"])(
     "rejects %s",
     (v) => {
       expect(isValidLastDuration(v)).toBe(false);

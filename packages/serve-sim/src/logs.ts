@@ -17,9 +17,9 @@ export function buildProcessPredicate(processName: string): string {
   return `process == "${escaped}"`;
 }
 
-/** `log show --last` accepts `<n>[s|m|h|d]` (bare numbers mean seconds). */
+/** `log show --last` accepts `<n>[s|m|h|d]` (bare numbers mean seconds). Zero is rejected. */
 export function isValidLastDuration(value: string): boolean {
-  return /^\d+[smhd]?$/.test(value);
+  return /^[1-9]\d*[smhd]?$/.test(value);
 }
 
 /**
