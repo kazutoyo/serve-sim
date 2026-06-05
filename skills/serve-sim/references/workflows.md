@@ -93,7 +93,10 @@ sleep 1
 APP_DATA=$(xcrun simctl get_app_container booted com.acme.MyApp data)
 ls -la "$APP_DATA/Documents/captures/"
 
-# 6. Tear down
+# 6. (Optional) Check the app's logs from the last 30 s to diagnose failures
+npx serve-sim logs --last 30s --app com.acme.MyApp
+
+# 7. Tear down
 npx serve-sim camera --stop-webcam
 ```
 
