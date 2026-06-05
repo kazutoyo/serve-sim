@@ -53,11 +53,13 @@ Captures directory:
 
 Lifecycle:
 
-- Recording continues across browser disconnects; only an explicit stop ends it.
-- On server process exit, any active recorder child gets SIGINT so the MP4 is
-  finalized rather than truncated.
-- If the device shuts down mid-recording, the simctl child exits; the server
-  detects this, resets recording state, and keeps the partial MP4.
+- Recording continues across browser disconnects and even across preview-server
+  restarts; only an explicit stop ends it. The recorder is a detached
+  `simctl io recordVideo` process tracked by a state file (see below), the same
+  pattern the camera helper uses (`STATE_DIR/simcam/<udid>.pid`).
+- If the device shuts down mid-recording, the simctl child exits; the next
+  status/stop call detects the dead pid, clears the state file, and keeps the
+  partial MP4.
 
 ## Web UI (packages/serve-sim/src/client/client.tsx)
 
@@ -77,13 +79,31 @@ not streaming, gateway disconnected):
   toast the host path. State is re-synced from `GET /api/record/status` on
   page load so a reload doesn't orphan the UI.
 
+## Shared module (packages/serve-sim/src/captures.ts)
+
+The web UI endpoints and the CLI share one implementation. (The per-device
+state file only records the Swift helper's port — the preview server's port is
+not discoverable from the CLI, so the CLI cannot call the HTTP endpoints.
+Instead both sides call this module directly; the CLI works even with no
+preview server running.)
+
+- `resolveCapturesDir(dir?)` — default `./serve-sim-captures` under cwd.
+- `captureFilename(kind, date)` — server-generated timestamp names.
+- `takeScreenshot(udid, dir)` — runs `simctl io screenshot`, returns the path.
+- `startRecording(udid, dir)` / `stopRecording(udid)` / `recordingStatus(udid)`
+  — the recorder is a detached `simctl io recordVideo --codec h264` process;
+  its pid + output path + start time live in
+  `STATE_DIR/recordings/<udid>.json`. A recording started from the web UI can
+  be stopped from the CLI and vice versa. Stop sends SIGINT and waits for the
+  process to exit (simctl finalizes the moov atom on SIGINT).
+
 ## CLI (packages/serve-sim/src/index.ts)
 
-Thin wrappers over the endpoints, discovering the server via the existing
-`readState()`:
+Thin wrappers over the captures module, resolving the device via the existing
+`readState()` (or `-d`):
 
 - `serve-sim screenshot [-o <path>] [-d udid]` — prints the saved host path;
-  with `-o`, fetches the capture and writes it there instead.
+  with `-o`, saves to that exact path instead.
 - `serve-sim record start [-d udid]` / `record stop [-d udid]` /
   `record status [-d udid]` — `stop` prints the saved MP4 path.
 
@@ -95,9 +115,13 @@ Thin wrappers over the endpoints, discovering the server via the existing
 
 ## Testing (TDD)
 
-- Unit (vitest): captures-dir resolution, filename generation, and the
-  recording state machine (start / stop / double-start / child-exit) extracted
-  as pure logic.
+- Unit (`bun:test`, matching the existing `src/__tests__/` suite):
+  captures-dir resolution, filename generation, recording state file
+  read/write with pid-liveness, and start/stop with an injectable command
+  (fake long-lived process instead of simctl). Middleware validation paths
+  (invalid udid, no device, path traversal on `/api/captures/<file>`, stop
+  with no active recording) tested against the real middleware without a
+  simulator.
 - E2E (existing CLI-driven flow): boot a simulator, start the server, run
   `serve-sim screenshot` and assert the PNG exists; `record start` → tap →
   `record stop` and assert the MP4 exists with nonzero size.
