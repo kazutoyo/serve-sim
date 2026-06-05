@@ -4,7 +4,7 @@ import type { DropKind } from "../utils/drop";
 export type UploadToast = {
   id: string;
   name: string;
-  kind: DropKind;
+  kind: DropKind | "capture";
   status: "uploading" | "success" | "error";
   // Determinate transfer progress 0..1; null once the upload completes
   // (install/addmedia phase has no progress signal — the bar goes indeterminate).
@@ -14,7 +14,7 @@ export type UploadToast = {
 
 export function useUploadToasts() {
   const [toasts, setToasts] = useState<UploadToast[]>([]);
-  const add = useCallback((name: string, kind: DropKind): string => {
+  const add = useCallback((name: string, kind: DropKind | "capture"): string => {
     const id = crypto.randomUUID();
     setToasts((t) => [...t, { id, name, kind, status: "uploading", progress: 0 }]);
     return id;
