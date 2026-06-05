@@ -7,6 +7,8 @@ import { randomBytes, timingSafeEqual } from "crypto";
 import type { IncomingMessage, ServerResponse } from "http";
 import { createAxStreamerCache } from "./ax";
 import { debugMw } from "./debug";
+import { buildLogStreamArgs, buildProcessPredicate, type LogLevel } from "./logs";
+import { fetchForegroundApp, resolveAppProcess } from "./logs-exec";
 
 type SimReq = IncomingMessage;
 type SimRes = ServerResponse;
@@ -1244,7 +1246,10 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
       return;
     }
 
-    // SSE: simctl log stream
+    // SSE: simctl log stream.
+    //   ?scope=app    — filter to the foreground app (resolved at connect time)
+    //   ?scope=system — unfiltered (default; matches pre-scope behavior)
+    //   ?level=...    — default | info | debug (default: info)
     if (url === base + "/logs") {
       const states = readServeSimStates();
       const state = selectServeSimState(states, selectedDevice);
@@ -1254,6 +1259,14 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
         return;
       }
       const udid = state.device;
+      const params = qIndex === -1
+        ? new URLSearchParams()
+        : new URLSearchParams(rawUrl.slice(qIndex + 1));
+      const scope = params.get("scope") === "app" ? "app" : "system";
+      const levelParam = params.get("level");
+      const level: LogLevel =
+        levelParam === "debug" || levelParam === "default" ? levelParam : "info";
+
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -1262,31 +1275,62 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
       });
       res.write(":\n\n");
 
-      const child: ChildProcess = spawn("xcrun", [
-        "simctl", "spawn", udid, "log", "stream",
-        "--style", "ndjson",
-        "--level", "info",
-      ], { stdio: ["ignore", "pipe", "ignore"] });
+      // The predicate lookup awaits the helper's /foreground probe, so the
+      // child is spawned async; keep it visible to the close handler below.
+      let child: ChildProcess | null = null;
+      let closed = false;
 
-      let buf = "";
-      child.stdout!.on("data", (chunk: Buffer) => {
-        buf += chunk.toString();
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) !== -1) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (line) res.write("data: " + line + "\n\n");
+      (async () => {
+        let predicate: string | undefined;
+        if (scope === "app") {
+          const fg = await fetchForegroundApp(state.port);
+          const processName = fg ? resolveAppProcess(udid, fg.bundleId) : null;
+          if (processName) {
+            predicate = buildProcessPredicate(processName);
+          } else {
+            // Scope-resolution failure: report it but keep the connection
+            // open on the unfiltered stream (spec: graceful fallback).
+            res.write(`event: error\ndata: ${JSON.stringify({
+              message: "Could not resolve the foreground app; streaming the system log",
+            })}\n\n`);
+          }
         }
-        // Drop a runaway partial line so a malformed/never-terminated
-        // log entry can't grow `buf` without bound.
-        if (buf.length > SSE_LINE_BUFFER_LIMIT) buf = "";
-      });
+        if (closed) return;
 
-      child.on("error", () => { try { res.end(); } catch {} });
-      child.on("close", () => res.end());
+        const c = spawn("xcrun", buildLogStreamArgs({ udid, level, predicate }), {
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        child = c;
+
+        let buf = "";
+        c.stdout!.on("data", (chunk: Buffer) => {
+          buf += chunk.toString();
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) !== -1) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (line) res.write("data: " + line + "\n\n");
+          }
+          // Drop a runaway partial line so a malformed/never-terminated
+          // log entry can't grow `buf` without bound.
+          if (buf.length > SSE_LINE_BUFFER_LIMIT) buf = "";
+        });
+
+        c.on("error", () => {
+          // Spawn failure: emit the error and close (spec: distinct from
+          // scope-resolution fallback above).
+          try {
+            res.write(`event: error\ndata: ${JSON.stringify({ message: "Failed to spawn simctl log stream" })}\n\n`);
+          } catch {}
+          try { res.end(); } catch {}
+        });
+        c.on("close", () => res.end());
+      })();
+
       req.on("close", () => {
-        child.stdout?.destroy();
-        child.kill();
+        closed = true;
+        child?.stdout?.destroy();
+        child?.kill();
       });
       return;
     }
