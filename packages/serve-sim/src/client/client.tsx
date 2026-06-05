@@ -909,7 +909,9 @@ function AppWithConfig({
                       (t.message ?? (t.kind === "ipa" ? `Installing ${t.name}…` : `Adding ${t.name}…`))}
                     {t.status === "success" &&
                       (t.message ?? (t.kind === "ipa" ? `Installed ${t.name}` : `Added ${t.name} to Photos`))}
-                    {isError && `${t.name}: ${t.message ?? "Upload failed"}`}
+                    {isError && (t.kind === "capture"
+                      ? (t.message ?? "Capture failed")
+                      : `${t.name}: ${t.message ?? "Upload failed"}`)}
                   </span>
                 </div>
                 {isUploading && (

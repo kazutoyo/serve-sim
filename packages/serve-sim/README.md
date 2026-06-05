@@ -49,6 +49,10 @@ serve-sim ca-debug <option> <on|off> [-d udid]
                                       Toggle a CoreAnimation debug flag
                                       (blended|copies|misaligned|offscreen|slow-animations)
 serve-sim memory-warning [-d udid]    Simulate a memory warning
+serve-sim screenshot [-d udid]        Capture a PNG screenshot; copies to clipboard
+                                      or saves to --captures-dir
+serve-sim record start [-d udid]      Start MP4 screen recording
+serve-sim record stop [-d udid]       Stop recording and finalize the MP4
 
 serve-sim camera <bundle-id> [-d udid] [source-options]
                                       Inject a synthetic camera feed and (re)launch the app
@@ -62,12 +66,14 @@ serve-sim camera --stop-webcam [-d udid]
                                       Stop the camera helper for a device
 
 Options:
-  -p, --port <port>   Starting port (preview default: 3200, stream default: 3100)
-  -d, --detach        Spawn helper and exit (daemon mode)
-  -q, --quiet         JSON-only output
-      --no-preview    Skip the web UI; stream in foreground only
-      --list [device] List running streams
-      --kill [device] Kill running stream(s)
+  -p, --port <port>         Starting port (preview default: 3200, stream default: 3100)
+  -d, --detach              Spawn helper and exit (daemon mode)
+  -q, --quiet               JSON-only output
+      --no-preview          Skip the web UI; stream in foreground only
+      --list [device]       List running streams
+      --kill [device]       Kill running stream(s)
+      --captures-dir <dir>  Directory for screenshots and recordings
+                            (default: ./serve-sim-captures)
 
 Camera options (used with `serve-sim camera <bundle-id>`):
   -f, --file <path>          Image or video file (kind auto-detected from

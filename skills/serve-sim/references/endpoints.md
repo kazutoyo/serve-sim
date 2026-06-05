@@ -75,6 +75,11 @@ This is a Node middleware that serves the preview UI and proxies state. It can b
 | `POST` | `/grid/api/start` | Spawn a helper for a specific device. |
 | `POST` | `/grid/api/shutdown` | Shut down a specific device. |
 | `POST` | `/grid/api/memory` | Memory usage report. |
+| `POST` | `/api/screenshot` | Capture PNG via simctl; returns `{ok, path, url}`. |
+| `POST` | `/api/record/start` | Start MP4 recording; returns 409 if already recording. |
+| `POST` | `/api/record/stop` | Stop and finalize recording; returns `{ok, path, url}` (404 if none active). |
+| `GET` | `/api/record/status` | `{recording, path?, startedAt?}`; accepts `?udid=` query param. |
+| `GET` | `/api/captures/<file>` | Serve a capture by server-generated name. |
 
 When embedding the middleware in another dev server (Metro, Vite, Express), the `basePath` is configurable:
 

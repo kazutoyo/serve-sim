@@ -1,11 +1,12 @@
 // packages/serve-sim/src/__tests__/capture-endpoints.test.ts
 import { describe, expect, test } from "bun:test";
 import { createServer } from "http";
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import type { AddressInfo } from "net";
 import { tmpdir } from "os";
 import { join } from "path";
 import { simMiddleware } from "../middleware";
+import { recordingStateFile, writeRecordingState } from "../captures";
 
 const CAPTURES_DIR = mkdtempSync(join(tmpdir(), "serve-sim-captures-ep-"));
 
@@ -70,6 +71,27 @@ describe("capture endpoints — validation", () => {
       expect(body).toBeTruthy();
     });
   });
+
+  test("POST /api/record/start while already recording → 409 with path", async () => {
+    const udid = "00000000-0000-0000-0000-00000000A409";
+    writeRecordingState(udid, { pid: process.pid, path: "/tmp/fake-recording.mp4", startedAt: 1 });
+    try {
+      await withServer(async (origin) => {
+        const r = await fetch(`${origin}/api/record/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ udid }),
+        });
+        expect(r.status).toBe(409);
+        const body = await r.json() as { ok: boolean; error: string; path: string };
+        expect(body.ok).toBe(false);
+        expect(body.path).toBe("/tmp/fake-recording.mp4");
+        expect(body.error).toContain("Already recording");
+      });
+    } finally {
+      rmSync(recordingStateFile(udid), { force: true });
+    }
+  });
 });
 
 describe("GET /api/captures/<file>", () => {
@@ -80,6 +102,16 @@ describe("GET /api/captures/<file>", () => {
       expect(r.status).toBe(200);
       expect(r.headers.get("content-type")).toBe("image/png");
       expect(await r.text()).toBe("fakepng");
+    });
+  });
+
+  test("serves a recording with video/mp4 content-type", async () => {
+    writeFileSync(join(CAPTURES_DIR, "recording-20260606-000000-000.mp4"), "fakemp4");
+    await withServer(async (origin) => {
+      const r = await fetch(`${origin}/api/captures/recording-20260606-000000-000.mp4`);
+      expect(r.status).toBe(200);
+      expect(r.headers.get("content-type")).toBe("video/mp4");
+      expect(await r.text()).toBe("fakemp4");
     });
   });
 
