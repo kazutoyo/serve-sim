@@ -69,8 +69,11 @@ One module used by both the CLI and the middleware:
 
 ```
 serve-sim logs [-d udid] [options]
-  --last <duration>    snapshot via `log show` (e.g. 30s, 2m). Default: 1m
+  --last <duration>    snapshot via `log show` (e.g. 30s, 2m)
   -f, --follow         live tail via `log stream` (mutually exclusive with --last in v1)
+
+  Without -f, the command runs in snapshot mode and --last defaults to 1m.
+  With -f, there is no backfill — the tail starts at invocation time.
   --app <bundleId>     filter to this app's process
   --system             no process filter (full system log)
   --level <level>      default | info | debug (default: info)
@@ -121,7 +124,9 @@ ToolsPanel), toggled from the toolbar:
 ## Error handling
 
 - Device not booted / simctl spawn failure: CLI prints a clear error and
-  exits non-zero; the SSE endpoint emits `event: error` before closing.
+  exits non-zero; the SSE endpoint emits `event: error` and closes. (This is
+  distinct from the scope-resolution failure above, which emits `event:
+  error` but keeps the connection open on the system stream.)
 - Predicate strings are escaped in one place (`buildProcessPredicate`).
 - Partial/garbage NDJSON lines are skipped by `parseLogLine`, never crash
   the stream. The existing SSE line-buffer cap stays.
