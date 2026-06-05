@@ -1,13 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
 import { isAbsolute, dirname, join, sep } from "path";
 import {
+  AlreadyRecordingError,
+  NotRecordingError,
   captureFilename,
+  readRecordingState,
   recordVideoArgs,
+  recordingStateFile,
+  recordingStatus,
   resolveCapturesDir,
   screenshotArgs,
-  readRecordingState,
-  recordingStateFile,
+  startRecording,
+  stopRecording,
   writeRecordingState,
   type RecordingState,
 } from "../captures";
@@ -83,5 +90,54 @@ describe("recording state file", () => {
 
   test("returns null for a missing file", () => {
     expect(readRecordingState("TEST-MISSING")).toBeNull();
+  });
+});
+
+describe("start/stop/status recording", () => {
+  const dir = mkdtempSync(join(tmpdir(), "serve-sim-captures-test-"));
+  const UDID = "TEST-REC-1";
+  const fakeCmd = { command: "/bin/sleep", args: ["100"] }; // stands in for xcrun simctl
+
+  test("startRecording spawns, registers state, and status reports it", async () => {
+    const started = await startRecording(UDID, dir, { cmd: fakeCmd });
+    try {
+      expect(started.path.startsWith(dir)).toBe(true);
+      expect(started.path.endsWith(".mp4")).toBe(true);
+      const status = recordingStatus(UDID);
+      expect(status.recording).toBe(true);
+      expect(status.path).toBe(started.path);
+    } finally {
+      await stopRecording(UDID).catch(() => {});
+    }
+  });
+
+  test("double start throws AlreadyRecordingError", async () => {
+    await startRecording(UDID, dir, { cmd: fakeCmd });
+    try {
+      await expect(startRecording(UDID, dir, { cmd: fakeCmd })).rejects.toBeInstanceOf(
+        AlreadyRecordingError,
+      );
+    } finally {
+      await stopRecording(UDID);
+    }
+  });
+
+  test("stopRecording kills the process, clears state, returns the path", async () => {
+    const started = await startRecording(UDID, dir, { cmd: fakeCmd });
+    const path = await stopRecording(UDID);
+    expect(path).toBe(started.path);
+    expect(recordingStatus(UDID).recording).toBe(false);
+    expect(readRecordingState(UDID)).toBeNull();
+  });
+
+  test("stopRecording with no active recording throws NotRecordingError", async () => {
+    await expect(stopRecording("TEST-NONE")).rejects.toBeInstanceOf(NotRecordingError);
+  });
+
+  test("startRecording surfaces an instantly-failing command as an error", async () => {
+    await expect(
+      startRecording("TEST-FAIL", dir, { cmd: { command: "/usr/bin/false", args: [] } }),
+    ).rejects.toThrow();
+    expect(recordingStatus("TEST-FAIL").recording).toBe(false);
   });
 });
