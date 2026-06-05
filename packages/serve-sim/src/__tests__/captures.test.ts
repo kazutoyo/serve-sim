@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { isAbsolute, join, sep } from "path";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { isAbsolute, dirname, join, sep } from "path";
 import {
   captureFilename,
   recordVideoArgs,
   resolveCapturesDir,
   screenshotArgs,
+  readRecordingState,
+  recordingStateFile,
+  writeRecordingState,
+  type RecordingState,
 } from "../captures";
 
 describe("resolveCapturesDir", () => {
@@ -46,5 +51,37 @@ describe("simctl argv builders", () => {
     expect(recordVideoArgs("ABC-123", "/tmp/x.mp4")).toEqual([
       "simctl", "io", "ABC-123", "recordVideo", "--codec", "h264", "/tmp/x.mp4",
     ]);
+  });
+});
+
+describe("recording state file", () => {
+  test("recordingStateFile path is per-udid under the state dir", () => {
+    expect(recordingStateFile("ABC-123")).toMatch(/serve-sim[/\\]recordings[/\\]ABC-123\.json$/);
+  });
+
+  test("round-trips state for a live pid", () => {
+    const state: RecordingState = {
+      pid: process.pid, // this test process is definitely alive
+      path: "/tmp/recording-x.mp4",
+      startedAt: 1717650000000,
+    };
+    writeRecordingState("TEST-LIVE", state);
+    try {
+      expect(readRecordingState("TEST-LIVE")).toEqual(state);
+    } finally {
+      rmSync(recordingStateFile("TEST-LIVE"), { force: true });
+    }
+  });
+
+  test("returns null and removes the file when the pid is dead", () => {
+    const file = recordingStateFile("TEST-DEAD");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ pid: 999999999, path: "/tmp/x.mp4", startedAt: 0 }));
+    expect(readRecordingState("TEST-DEAD")).toBeNull();
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("returns null for a missing file", () => {
+    expect(readRecordingState("TEST-MISSING")).toBeNull();
   });
 });
