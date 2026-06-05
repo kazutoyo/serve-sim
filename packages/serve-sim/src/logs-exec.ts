@@ -1,4 +1,4 @@
-import { execFileSync } from "child_process";
+import { execFileSync, execFile } from "child_process";
 import { findExecutableForBundle, type ListedApp } from "./logs";
 
 /**
@@ -25,6 +25,42 @@ export function resolveAppProcess(udid: string, bundleId: string): string | null
   } catch {
     return null;
   }
+}
+
+/**
+ * Async variant of `resolveAppProcess` for the middleware, which resolves
+ * after the SSE response is committed — execFileSync there would block the
+ * host dev server's event loop for the duration of the listapps + plutil run.
+ */
+export function resolveAppProcessAsync(
+  udid: string,
+  bundleId: string,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "xcrun", ["simctl", "listapps", udid],
+      { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 },
+      (err, plist) => {
+        if (err) return resolve(null);
+        const child = execFile(
+          "plutil", ["-convert", "json", "-o", "-", "--", "-"],
+          { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 },
+          (err2, json) => {
+            if (err2) return resolve(null);
+            try {
+              resolve(findExecutableForBundle(
+                JSON.parse(json) as Record<string, ListedApp>,
+                bundleId,
+              ));
+            } catch {
+              resolve(null);
+            }
+          },
+        );
+        child.stdin!.end(plist);
+      },
+    );
+  });
 }
 
 /**

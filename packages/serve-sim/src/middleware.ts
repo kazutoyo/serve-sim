@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from "http";
 import { createAxStreamerCache } from "./ax";
 import { debugMw } from "./debug";
 import { buildLogStreamArgs, buildProcessPredicate, type LogLevel } from "./logs";
-import { fetchForegroundApp, resolveAppProcess } from "./logs-exec";
+import { fetchForegroundApp, resolveAppProcessAsync } from "./logs-exec";
 
 type SimReq = IncomingMessage;
 type SimRes = ServerResponse;
@@ -1284,7 +1284,7 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
         let predicate: string | undefined;
         if (scope === "app") {
           const fg = await fetchForegroundApp(state.port);
-          const processName = fg ? resolveAppProcess(udid, fg.bundleId) : null;
+          const processName = fg ? await resolveAppProcessAsync(udid, fg.bundleId) : null;
           if (processName) {
             predicate = buildProcessPredicate(processName);
           } else {
@@ -1304,6 +1304,7 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
 
         let buf = "";
         c.stdout!.on("data", (chunk: Buffer) => {
+          if (closed) return;
           buf += chunk.toString();
           let nl: number;
           while ((nl = buf.indexOf("\n")) !== -1) {
@@ -1324,7 +1325,7 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
           } catch {}
           try { res.end(); } catch {}
         });
-        c.on("close", () => res.end());
+        c.on("close", () => { if (!closed) res.end(); });
       })();
 
       req.on("close", () => {
