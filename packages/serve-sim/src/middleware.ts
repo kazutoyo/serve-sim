@@ -1,12 +1,21 @@
-import { readdirSync, readFileSync, existsSync, unlinkSync, watch, type FSWatcher } from "fs";
+import { readdirSync, readFileSync, existsSync, unlinkSync, watch, createReadStream, type FSWatcher } from "fs";
 import { execSync, spawn, exec, execFile, type ChildProcess, type ExecException } from "child_process";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, basename } from "path";
 import { createServer as createNetServer } from "net";
 import { randomBytes, timingSafeEqual } from "crypto";
 import type { IncomingMessage, ServerResponse } from "http";
 import { createAxStreamerCache } from "./ax";
 import { debugMw } from "./debug";
+import {
+  resolveCapturesDir,
+  takeScreenshot,
+  startRecording,
+  stopRecording,
+  recordingStatus,
+  AlreadyRecordingError,
+  NotRecordingError,
+} from "./captures";
 
 type SimReq = IncomingMessage;
 type SimRes = ServerResponse;
@@ -20,6 +29,23 @@ const STATE_DIR = join(tmpdir(), "serve-sim");
 let lastApiLogKey: string | undefined;
 const DEVTOOLS_FRONTEND_REV = "854a02be78c7ffea104cb523636efa991bef5c5b";
 const INSPECT_WEBKIT_START_PORT = 9222;
+
+/** Only filenames produced by captureFilename() are accepted by GET /api/captures/<file>. */
+const CAPTURE_FILE_RE = /^(screenshot|recording)-\d{8}-\d{6}-\d{3}\.(png|mp4)$/;
+
+/** Accumulate request body and JSON-parse it; resolves {} on parse error. */
+async function readJsonBody(req: SimReq): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (chunk: Buffer | string) => {
+      raw += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    req.on("end", () => {
+      try { resolve(JSON.parse(raw) as Record<string, unknown>); } catch { resolve({}); }
+    });
+    req.on("error", () => resolve({}));
+  });
+}
 
 type WebKitBridgeTarget = {
   id: string;
@@ -674,6 +700,11 @@ export interface SimMiddlewareOptions {
    * cross-origin pages cannot read it.
    */
   execToken?: string;
+  /**
+   * Directory where screenshots and recordings are written.
+   * Default: `./serve-sim-captures` under the server's cwd.
+   */
+  capturesDir?: string;
 }
 
 function safeEqualString(a: string, b: string): boolean {
@@ -705,6 +736,7 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
   // can call /exec; cross-origin pages and LAN clients cannot, because they
   // can't read this value (it's only injected into the preview page's config).
   const execToken = options?.execToken ?? randomBytes(32).toString("base64url");
+  const capturesDir = resolveCapturesDir(options?.capturesDir);
 
   return (req: SimReq, res: SimRes, next?: SimNext) => {
     const rawUrl: string = req.url ?? "";
@@ -930,6 +962,150 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
       });
       return;
     }
+
+    // ── Capture endpoints ────────────────────────────────────────────────────
+    // Helpers shared across capture routes, defined as closures so they have
+    // access to `res` and `base`.
+    {
+      // UDID regex — same format validated by the /grid/api/shutdown route.
+      const UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+
+      const sendJson = (status: number, payload: unknown) => {
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(payload));
+      };
+
+      const captureUrl = (filePath: string) =>
+        `${base}/api/captures/${encodeURIComponent(basename(filePath))}`;
+
+      /**
+       * Resolve the target UDID: explicit body value first, then selected
+       * helper state. Returns `{udid}` on success or `{error}` to send.
+       */
+      const resolveCaptureUdid = (
+        explicit: unknown,
+      ): { udid: string; error?: never } | { udid?: never; error: { status: number; body: unknown } } => {
+        if (explicit !== undefined) {
+          if (typeof explicit !== "string" || !UDID_RE.test(explicit)) {
+            return { error: { status: 400, body: { ok: false, error: "Invalid udid" } } };
+          }
+          return { udid: explicit };
+        }
+        const states = readServeSimStates();
+        const state = selectServeSimState(states, selectedDevice);
+        if (!state) {
+          return { error: { status: 404, body: { ok: false, error: "No serve-sim device" } } };
+        }
+        return { udid: state.device };
+      };
+
+      // POST /api/screenshot — capture a PNG from the simulator screen.
+      if (url === base + "/api/screenshot" && req.method === "POST") {
+        (async () => {
+          const body = await readJsonBody(req);
+          const resolved = resolveCaptureUdid(body.udid);
+          if (resolved.error) { sendJson(resolved.error.status, resolved.error.body); return; }
+          try {
+            const path = await takeScreenshot(resolved.udid, capturesDir);
+            sendJson(200, { ok: true, path, url: captureUrl(path) });
+          } catch (err) {
+            sendJson(500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+          }
+        })();
+        return;
+      }
+
+      // POST /api/record/start — start a video recording.
+      if (url === base + "/api/record/start" && req.method === "POST") {
+        (async () => {
+          const body = await readJsonBody(req);
+          const resolved = resolveCaptureUdid(body.udid);
+          if (resolved.error) { sendJson(resolved.error.status, resolved.error.body); return; }
+          try {
+            const state = await startRecording(resolved.udid, capturesDir);
+            sendJson(200, { ok: true, path: state.path, startedAt: state.startedAt });
+          } catch (err) {
+            if (err instanceof AlreadyRecordingError) {
+              sendJson(409, { ok: false, error: err.message, path: err.path });
+            } else {
+              sendJson(500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+          }
+        })();
+        return;
+      }
+
+      // POST /api/record/stop — stop the active recording.
+      if (url === base + "/api/record/stop" && req.method === "POST") {
+        (async () => {
+          const body = await readJsonBody(req);
+          const resolved = resolveCaptureUdid(body.udid);
+          if (resolved.error) { sendJson(resolved.error.status, resolved.error.body); return; }
+          try {
+            const path = await stopRecording(resolved.udid);
+            sendJson(200, { ok: true, path, url: captureUrl(path) });
+          } catch (err) {
+            if (err instanceof NotRecordingError) {
+              sendJson(404, { ok: false, error: err.message });
+            } else {
+              sendJson(500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+          }
+        })();
+        return;
+      }
+
+      // GET /api/record/status — check recording state for a device.
+      if (url === base + "/api/record/status" && req.method !== "POST") {
+        const params = qIndex === -1 ? new URLSearchParams() : new URLSearchParams(rawUrl.slice(qIndex + 1));
+        const udidParam = params.get("udid");
+        if (udidParam !== null) {
+          if (!UDID_RE.test(udidParam)) {
+            sendJson(400, { ok: false, error: "Invalid udid" });
+            return;
+          }
+          sendJson(200, recordingStatus(udidParam));
+          return;
+        }
+        const states = readServeSimStates();
+        const state = selectServeSimState(states, selectedDevice);
+        if (!state) {
+          sendJson(404, { ok: false, error: "No serve-sim device" });
+          return;
+        }
+        sendJson(200, recordingStatus(state.device));
+        return;
+      }
+
+      // GET /api/captures/<file> — serve a file from the captures directory.
+      const capturesPrefix = base + "/api/captures/";
+      if (url.startsWith(capturesPrefix) && req.method !== "POST") {
+        let fileName: string;
+        try {
+          fileName = decodeURIComponent(url.slice(capturesPrefix.length));
+        } catch {
+          sendJson(400, { ok: false, error: "Invalid file name encoding" });
+          return;
+        }
+        if (!CAPTURE_FILE_RE.test(fileName)) {
+          sendJson(400, { ok: false, error: "Invalid capture file name" });
+          return;
+        }
+        const filePath = join(capturesDir, fileName);
+        if (!existsSync(filePath)) {
+          sendJson(404, { ok: false, error: "File not found" });
+          return;
+        }
+        const contentType = fileName.endsWith(".mp4") ? "video/mp4" : "image/png";
+        res.writeHead(200, {
+          "Content-Type": contentType,
+          "Cache-Control": "no-store",
+        });
+        createReadStream(filePath).pipe(res);
+        return;
+      }
+    }
+    // ── End capture endpoints ─────────────────────────────────────────────────
 
     // JSON API: start the inspect-webkit CDP bridge and list WebKit targets
     // for the selected simulator. The bridge itself serves /json/list and
