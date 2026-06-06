@@ -33,21 +33,27 @@ function cli(...args: string[]): string {
 }
 
 describeIfSim("serve-sim logs (e2e)", () => {
+  // A 10s window keeps these tests fast and bounded: on a freshly booted CI
+  // simulator the archive is dominated by boot spew, and a 2m window made
+  // `log show` overrun bun's default 5s test timeout while the raw NDJSON
+  // blew through execFileSync's 64MB maxBuffer (ENOBUFS). Even an idle sim
+  // logs hundreds of system entries per 10s, so the window is never empty.
+  // The explicit per-test timeout covers slow CI runners.
   test("--system --last returns formatted lines", () => {
-    const out = cli("--system", "--last", "2m");
+    const out = cli("--system", "--last", "10s");
     const lines = out.trim().split("\n").filter(Boolean);
     expect(lines.length).toBeGreaterThan(0);
     // "07:47:07.934 DEFAULT systemsoundserver-simd: ..."
     expect(lines[0]).toMatch(/^\d{2}:\d{2}:\d{2}\.\d{3} \S+\s+\S+.*: /);
-  });
+  }, 60_000);
 
   test("--json returns parseable NDJSON", () => {
-    const out = cli("--system", "--last", "2m", "--json");
+    const out = cli("--system", "--last", "10s", "--json");
     const lines = out.trim().split("\n").filter((l) => l.trim().startsWith("{"));
     expect(lines.length).toBeGreaterThan(0);
     const entry = JSON.parse(lines[0]!) as { eventMessage?: string };
     expect(typeof entry.eventMessage).toBe("string");
-  });
+  }, 60_000);
 
   test("--last with --follow exits non-zero", () => {
     expect(() => cli("--last", "1m", "--follow")).toThrow();
