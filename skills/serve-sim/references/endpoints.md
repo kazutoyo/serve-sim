@@ -66,7 +66,7 @@ This is a Node middleware that serves the preview UI and proxies state. It can b
 |---|---|---|
 | `GET` | `/.sim` | The preview HTML page (React UI showing the simulator stream). |
 | `GET` | `/.sim/api` | JSON state: `{device, pid, port, url, streamUrl, wsUrl}`. |
-| `GET` | `/.sim/logs` | SSE stream of simulator console logs (text/event-stream, NDJSON events). |
+| `GET` | `/.sim/logs` | SSE stream of `simctl log stream` NDJSON entries (`text/event-stream`). Query params: `?scope=app` (filter to foreground app, resolved at connect time — reconnect to re-resolve after app switches), `?scope=system` or absent (unfiltered, backward compatible), `?level=default\|info\|debug` (default: `info`). On scope-resolution failure (e.g. home screen — no foreground app): `event: error` with `{message}`; the connection stays open but idle (no log entries) until the client reconnects after a foreground-app change. On spawn failure: `event: error` then the stream closes. |
 | `GET` | `/.sim/ax` | SSE stream of accessibility tree snapshots. |
 | `POST` | `/.sim/exec` | Run a shell command on the host. **Requires a bearer token.** |
 | `POST` | `/.sim/appstate` | SSE-like stream of frontmost-app changes. |
