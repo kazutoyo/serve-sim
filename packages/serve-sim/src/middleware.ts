@@ -1285,15 +1285,21 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
         if (scope === "app") {
           const fg = await fetchForegroundApp(state.port);
           const processName = fg ? await resolveAppProcessAsync(udid, fg.bundleId) : null;
-          if (processName) {
-            predicate = buildProcessPredicate(processName);
-          } else {
-            // Scope-resolution failure: report it but keep the connection
-            // open on the unfiltered stream (spec: graceful fallback).
+          if (!processName) {
+            // Scope-resolution failure (home screen / SpringBoard foreground,
+            // helper unreachable, app missing from listapps). Streaming the
+            // unfiltered system log here would silently break the "App"
+            // contract, so report the error and hold the connection open but
+            // idle instead. The panel re-connects when the foreground app
+            // changes (via the appstate stream), which re-resolves the scope.
+            // Ending the response would make EventSource auto-reconnect every
+            // ~3s and hammer listapps — keeping it open avoids that.
             res.write(`event: error\ndata: ${JSON.stringify({
-              message: "Could not resolve the foreground app; streaming the system log",
+              message: "No foreground app to filter on — open an app in the simulator, or switch to the system scope",
             })}\n\n`);
+            return;
           }
+          predicate = buildProcessPredicate(processName);
         }
         if (closed) return;
 
