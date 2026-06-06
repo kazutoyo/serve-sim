@@ -1099,6 +1099,9 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
         const contentType = fileName.endsWith(".mp4") ? "video/mp4" : "image/png";
         res.writeHead(200, {
           "Content-Type": contentType,
+          // Force a download: browsers that ignore the <a download> attribute
+          // would otherwise navigate to the image instead of saving it.
+          "Content-Disposition": `attachment; filename="${fileName}"`,
           "Cache-Control": "no-store",
         });
         createReadStream(filePath).pipe(res);

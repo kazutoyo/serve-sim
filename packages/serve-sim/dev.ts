@@ -562,6 +562,9 @@ Bun.serve({
       return new Response(Bun.file(filePath), {
         headers: {
           "Content-Type": name.endsWith(".png") ? "image/png" : "video/mp4",
+          // Force a download: browsers that ignore the <a download> attribute
+          // would otherwise navigate to the image instead of saving it.
+          "Content-Disposition": `attachment; filename="${name}"`,
           "Cache-Control": "no-store",
         },
       });

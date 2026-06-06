@@ -101,6 +101,9 @@ describe("GET /api/captures/<file>", () => {
       const r = await fetch(`${origin}/api/captures/screenshot-20260606-000000-000.png`);
       expect(r.status).toBe(200);
       expect(r.headers.get("content-type")).toBe("image/png");
+      expect(r.headers.get("content-disposition")).toBe(
+        'attachment; filename="screenshot-20260606-000000-000.png"',
+      );
       expect(await r.text()).toBe("fakepng");
     });
   });
@@ -111,6 +114,9 @@ describe("GET /api/captures/<file>", () => {
       const r = await fetch(`${origin}/api/captures/recording-20260606-000000-000.mp4`);
       expect(r.status).toBe(200);
       expect(r.headers.get("content-type")).toBe("video/mp4");
+      expect(r.headers.get("content-disposition")).toBe(
+        'attachment; filename="recording-20260606-000000-000.mp4"',
+      );
       expect(await r.text()).toBe("fakemp4");
     });
   });
