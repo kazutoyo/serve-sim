@@ -25,6 +25,7 @@ import { ReloadIcon } from "./icons";
 import { AxDomOverlay } from "./components/ax-dom-overlay";
 import { AxStateProvider } from "./components/ax-state-provider";
 import { AxToolbarButton } from "./components/ax-toolbar-button";
+import { RecordToolbarButton } from "./components/record-toolbar-button";
 import { BootEmptyState } from "./components/boot-empty-state";
 import { DevicePicker } from "./components/device-picker";
 import { GridPanel } from "./components/grid-panel";
@@ -54,6 +55,7 @@ import {
   GRID_PANEL_WIDTH,
   PANEL_WIDTH,
 } from "./utils/panel-widths";
+import { captureBasename, copyImageToClipboard, downloadFile, takeScreenshot } from "./utils/captures";
 import { simEndpoint } from "./utils/sim-endpoint";
 import {
   SIMULATOR_RESIZE_DRAG_TRANSITION,
@@ -637,6 +639,29 @@ function AppWithConfig({
   }, [switching, config.device, setSwitching]);
 
   const uploads = useUploadToasts();
+
+  const notifyCapture = useCallback((ok: boolean, message: string) => {
+    const id = uploads.add("capture", "capture");
+    uploads.update(id, { status: ok ? "success" : "error", message });
+  }, [uploads]);
+
+  const handleScreenshot = useCallback(async () => {
+    try {
+      const r = await takeScreenshot(config.device);
+      if (!r.ok || !r.path || !r.url) {
+        notifyCapture(false, r.error ?? "Screenshot failed");
+        return;
+      }
+      const copied = await copyImageToClipboard(r.url);
+      if (!copied) downloadFile(r.url, captureBasename(r.path));
+      notifyCapture(true, copied
+        ? `Copied to clipboard (saved to ${r.path})`
+        : `Saved to ${r.path}`);
+    } catch (err) {
+      notifyCapture(false, err instanceof Error ? err.message : "Screenshot failed");
+    }
+  }, [config.device, notifyCapture]);
+
   const mediaDrop = useMediaDrop({
     exec: execOnHost,
     udid: config.device,
@@ -759,6 +784,18 @@ function AppWithConfig({
               streaming={streaming}
               onToggleOverlay={() => setAxOverlayEnabled((enabled) => !enabled)}
             />
+            <SimulatorToolbar.Button
+              aria-label="Screenshot"
+              title="Screenshot (copies to clipboard)"
+              onClick={() => void handleScreenshot()}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z" />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
+            </SimulatorToolbar.Button>
+            <RecordToolbarButton udid={config.device} streaming={streaming} onResult={notifyCapture} />
             <SimulatorToolbar.RotateButton title="Rotate device" />
           </SimulatorToolbar.Actions>
         </SimulatorToolbar>
@@ -869,10 +906,12 @@ function AppWithConfig({
                     {isUploading && transferring &&
                       `Uploading ${t.name}… ${pct}%`}
                     {isUploading && !transferring &&
-                      (t.kind === "ipa" ? `Installing ${t.name}…` : `Adding ${t.name}…`)}
+                      (t.message ?? (t.kind === "ipa" ? `Installing ${t.name}…` : `Adding ${t.name}…`))}
                     {t.status === "success" &&
-                      (t.kind === "ipa" ? `Installed ${t.name}` : `Added ${t.name} to Photos`)}
-                    {isError && `${t.name}: ${t.message ?? "Upload failed"}`}
+                      (t.message ?? (t.kind === "ipa" ? `Installed ${t.name}` : `Added ${t.name} to Photos`))}
+                    {isError && (t.kind === "capture"
+                      ? (t.message ?? "Capture failed")
+                      : `${t.name}: ${t.message ?? "Upload failed"}`)}
                   </span>
                 </div>
                 {isUploading && (

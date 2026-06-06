@@ -8,9 +8,18 @@
 import { readdirSync, readFileSync, existsSync, unlinkSync, watch } from "fs";
 import { execSync, spawn, exec, execFile, type ChildProcess } from "child_process";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
 import tailwindPlugin from "bun-plugin-tailwind";
 import { createAxStreamerCache } from "./src/ax";
+import {
+  AlreadyRecordingError,
+  NotRecordingError,
+  recordingStatus,
+  resolveCapturesDir,
+  startRecording,
+  stopRecording,
+  takeScreenshot,
+} from "./src/captures";
 
 const RN_BUNDLE_IDS = new Set<string>([
   "host.exp.Exponent",
@@ -57,6 +66,11 @@ function resolveServeSimBin(): string {
 }
 const SERVE_SIM_BIN = resolveServeSimBin();
 const axStreamerCache = createAxStreamerCache();
+const CAPTURES_DIR = resolveCapturesDir(undefined);
+const UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+// Only names captureFilename() generates — keeps /api/captures from serving
+// anything else out of the directory. Mirrors middleware.ts.
+const CAPTURE_FILE_RE = /^(screenshot|recording)-\d{8}-\d{6}-\d{3}\.(png|mp4)$/;
 
 type ServeSimState = {
   pid: number;
@@ -463,6 +477,96 @@ Bun.serve({
             }));
           });
         });
+      });
+    }
+
+    // Capture endpoints — same shapes as the middleware (see middleware.ts).
+    // The dev server reimplements routes, so without these the catch-all
+    // returns the HTML page and the client's res.json() throws on "<!doctype".
+    const resolveCaptureUdid = (explicit: unknown): { udid?: string; error?: string; status?: number } => {
+      if (typeof explicit === "string" && explicit.length > 0) {
+        if (!UDID_RE.test(explicit)) return { error: "Invalid udid", status: 400 };
+        return { udid: explicit };
+      }
+      const state = selectServeSimState(readServeSimStates(), selectedDevice);
+      if (!state) return { error: "No serve-sim device", status: 404 };
+      return { udid: state.device };
+    };
+    const captureUrl = (filePath: string) => `/api/captures/${encodeURIComponent(basename(filePath))}`;
+
+    if (url.pathname === "/api/screenshot" && req.method === "POST") {
+      return req.json().catch(() => ({})).then(async (body: any) => {
+        const target = resolveCaptureUdid(body?.udid);
+        if (!target.udid) return Response.json({ ok: false, error: target.error }, { status: target.status });
+        try {
+          const path = await takeScreenshot(target.udid, CAPTURES_DIR);
+          return Response.json({ ok: true, path, url: captureUrl(path) }, { headers: { "Cache-Control": "no-store" } });
+        } catch (err) {
+          return Response.json({ ok: false, error: err instanceof Error ? err.message : "screenshot failed" }, { status: 500 });
+        }
+      });
+    }
+
+    if (url.pathname === "/api/record/start" && req.method === "POST") {
+      return req.json().catch(() => ({})).then(async (body: any) => {
+        const target = resolveCaptureUdid(body?.udid);
+        if (!target.udid) return Response.json({ ok: false, error: target.error }, { status: target.status });
+        try {
+          const state = await startRecording(target.udid, CAPTURES_DIR);
+          return Response.json({ ok: true, path: state.path, startedAt: state.startedAt }, { headers: { "Cache-Control": "no-store" } });
+        } catch (err) {
+          if (err instanceof AlreadyRecordingError) {
+            return Response.json({ ok: false, error: err.message, path: err.path }, { status: 409 });
+          }
+          return Response.json({ ok: false, error: err instanceof Error ? err.message : "record failed" }, { status: 500 });
+        }
+      });
+    }
+
+    if (url.pathname === "/api/record/stop" && req.method === "POST") {
+      return req.json().catch(() => ({})).then(async (body: any) => {
+        const target = resolveCaptureUdid(body?.udid);
+        if (!target.udid) return Response.json({ ok: false, error: target.error }, { status: target.status });
+        try {
+          const path = await stopRecording(target.udid);
+          return Response.json({ ok: true, path, url: captureUrl(path) }, { headers: { "Cache-Control": "no-store" } });
+        } catch (err) {
+          if (err instanceof NotRecordingError) {
+            return Response.json({ ok: false, error: err.message }, { status: 404 });
+          }
+          return Response.json({ ok: false, error: err instanceof Error ? err.message : "stop failed" }, { status: 500 });
+        }
+      });
+    }
+
+    if (url.pathname === "/api/record/status") {
+      const target = resolveCaptureUdid(url.searchParams.get("udid") ?? undefined);
+      if (!target.udid) return Response.json({ ok: false, error: target.error }, { status: target.status });
+      return Response.json(recordingStatus(target.udid), { headers: { "Cache-Control": "no-store" } });
+    }
+
+    if (url.pathname.startsWith("/api/captures/")) {
+      let name = "";
+      try {
+        name = decodeURIComponent(url.pathname.slice("/api/captures/".length));
+      } catch {
+        return Response.json({ ok: false, error: "Invalid capture name" }, { status: 400 });
+      }
+      if (!CAPTURE_FILE_RE.test(name)) {
+        return Response.json({ ok: false, error: "Invalid capture name" }, { status: 400 });
+      }
+      const filePath = join(CAPTURES_DIR, name);
+      if (!existsSync(filePath)) {
+        return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+      }
+      return new Response(Bun.file(filePath), {
+        headers: {
+          "Content-Type": name.endsWith(".png") ? "image/png" : "video/mp4",
+          // Force a download: browsers that ignore the <a download> attribute
+          // would otherwise navigate to the image instead of saving it.
+          "Content-Disposition": `attachment; filename="${name}"`,
+          "Cache-Control": "no-store",
+        },
       });
     }
 
